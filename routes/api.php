@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\PolicyController;
 use Illuminate\Support\Facades\Route;
 
 // Public routes
@@ -25,6 +26,15 @@ Route::middleware('auth:api')->group(function () {
         Route::get('policy-type/{policyType}', [CustomerController::class, 'byPolicyType']);
         Route::get('stats/summary', [CustomerController::class, 'summaryStats']);
     });
+
+    // Policy CRUD routes
+    Route::apiResource('policies', PolicyController::class);
+    
+    // Additional policy routes
+    Route::prefix('policies')->group(function () {
+        Route::get('stats/summary', [PolicyController::class, 'stats']);
+    });
+
 });
 
 // Health check (public)
