@@ -16,20 +16,20 @@ class AuthController extends Controller
     /**
      * Register a new customer
      */
-    public function register(Request $request): JsonResponse
-    {
-        try {
-            $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255',
-                'email' => 'required|string|email|max:255|unique:customers',
-                'phone_number' => 'required|string|max:15',
-                'address' => 'required|string|max:500',
-                'pan' => 'required|string|size:10|unique:customers,pan',
-                'policy_number' => 'required|string|unique:customers,policy_number',
-                'policy_type' => 'required|string|in:Life Insurance,Health Insurance,Motor Insurance,Term Insurance,Travel Insurance',
-                'password' => 'required|string|min:8|confirmed',
-                'device_token' => 'nullable|string'
-            ]);
+public function register(Request $request): JsonResponse
+{
+    try {
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:customers',
+            'phone_number' => 'required|string|max:15',
+            'address' => 'required|string|max:500',
+            'pan' => 'required|string|size:10|unique:customers,pan',
+            'policy_number' => 'required|string|unique:customers,policy_number',
+            'policy_type' => 'required|string|in:Life Insurance,Health Insurance,Motor Insurance,Term Insurance,Travel Insurance',
+            'password' => 'required|string|min:8|confirmed',
+            'device_token' => 'nullable|string'
+        ]);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -243,6 +243,58 @@ class AuthController extends Controller
                 'message' => 'Password reset failed',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Simple JWT token verification
+     * Just checks if the token is valid without additional security checks
+    */
+    public function verifyToken(Request $request): JsonResponse
+    {
+        try {
+            // Get token from request
+            $token = JWTAuth::getToken();
+            
+            if (!$token) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Token not provided'
+                ], 401);
+            }
+
+            // Simply verify the token - this will throw exceptions if invalid
+            $payload = JWTAuth::getPayload($token);
+            
+            // If we get here, the token is valid
+            return response()->json([
+                'success' => true,
+                'message' => 'Token is valid',
+                'data' => [
+                    'issued_at' => $payload->get('iat'),
+                    'expires_at' => $payload->get('exp'),
+                    'time_to_expire' => $payload->get('exp') - time(),
+                    'token_type' => 'bearer'
+                ]
+            ]);
+
+        } catch (\Tymon\JWTAuth\Exceptions\TokenExpiredException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Token has expired'
+            ], 401);
+            
+        } catch (\Tymon\JWTAuth\Exceptions\TokenInvalidException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Token is invalid'
+            ], 401);
+            
+        } catch (\Tymon\JWTAuth\Exceptions\JWTException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Token verification failed'
+            ], 401);
         }
     }
 }
