@@ -30,11 +30,17 @@ Route::middleware('auth:api')->group(function () {
 
     // Policy CRUD routes
     Route::apiResource('policies', PolicyController::class);
+    ///
+
+    Route::get('policies', [PolicyController::class, 'index']);
+    Route::get('policies/{id}', [PolicyController::class, 'show']);
+    Route::post('policies/calculate', [PolicyController::class, 'calculateMaturity']);
     
-    // Additional policy routes
-    Route::prefix('policies')->group(function () {
-        Route::get('stats/summary', [PolicyController::class, 'stats']);
-    });
+    // Subscription management
+    Route::post('policies/subscribe', [PolicyController::class, 'subscribe']);
+    Route::get('policies/subscriptions', [PolicyController::class, 'getSubscriptions']);
+    Route::get('policies/stats', [PolicyController::class, 'getStats']);
+    Route::post('policies/subscriptions/{id}/cancel', [PolicyController::class, 'cancelSubscription']);
 
 });
 

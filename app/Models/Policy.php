@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use MongoDB\Laravel\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Policy extends Model
 {
@@ -11,81 +12,95 @@ class Policy extends Model
     
     protected $fillable = [
         'policy_number',
-        'policy_name',
-        'term_plan',
-        'rate_of_interest',
-        'investment_type',
+        'name',
+        'type',
+        'duration',
+        'interest_rate',
         'min_investment',
         'max_investment',
         'description',
         'benefits',
-        'is_active',
-        'valid_from',
-        'valid_to'
+        'is_active'
     ];
     
     protected $casts = [
-        'rate_of_interest' => 'decimal:2',
-        'investment_type' => 'boolean',
+        'interest_rate' => 'decimal:2',
         'min_investment' => 'decimal:2',
         'max_investment' => 'decimal:2',
+        'duration' => 'integer',
         'is_active' => 'boolean',
-        'valid_from' => 'datetime',
-        'valid_to' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
 
-    /**
-     * Get investment type as text
-     */
-    public function getInvestmentTypeTextAttribute(): string
+    protected static function boot()
     {
-        return $this->investment_type ? 'Monthly' : 'Daily';
+        parent::boot();
+
+        static::creating(function ($policy) {
+            if (empty($policy->policy_number)) {
+                $policy->policy_number = static::generatePolicyNumber();
+            }
+        });
     }
 
-    /**
-     * Check if policy is currently valid
-     */
-    public function getIsValidAttribute(): bool
+    public static function generatePolicyNumber(): string
     {
-        $now = now();
-        $validFrom = $this->valid_from ? $this->valid_from->lte($now) : true;
-        $validTo = $this->valid_to ? $this->valid_to->gte($now) : true;
+        $prefix = 'POL';
+        $random = Str::upper(Str::random(6)); // 6 random characters
+        $timestamp = now()->format('mdHis'); // Month, day, hour, minute, second
         
-        return $this->is_active && $validFrom && $validTo;
+        return $prefix . $random . $timestamp;
     }
 
-    /**
-     * Scope active policies
-     */
+    public function subscriptions()
+    {
+        return $this->hasMany(PolicySubscription::class);
+    }
+
+    public function activeSubscriptions()
+    {
+        return $this->subscriptions()->where('status', 'active');
+    }
+
+    public function getTypeLabelAttribute(): string
+    {
+        return match($this->type) {
+            'monthly' => 'Monthly Investment',
+            'daily' => 'Daily Investment',
+            'digital_gold' => 'Digital Gold',
+            default => ucfirst($this->type)
+        };
+    }
+
+    public function calculateMaturityAmount($investmentAmount): float
+    {
+        $years = $this->duration;
+        $rate = $this->interest_rate / 100;
+        
+        // Compound interest calculation
+        $maturityAmount = $investmentAmount * pow(1 + $rate, $years);
+        
+        return round($maturityAmount, 2);
+    }
+
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
     }
 
-    /**
-     * Scope valid policies (active and within date range)
-     */
-    public function scopeValid($query)
+    public function scopeByType($query, $type)
     {
-        $now = now();
-        return $query->where('is_active', true)
-            ->where(function($q) use ($now) {
-                $q->whereNull('valid_from')
-                  ->orWhere('valid_from', '<=', $now);
-            })
-            ->where(function($q) use ($now) {
-                $q->whereNull('valid_to')
-                  ->orWhere('valid_to', '>=', $now);
-            });
+        return $query->where('type', $type);
     }
 
-    /**
-     * Scope by investment type
-     */
-    public function scopeByInvestmentType($query, $type)
+    public function scopeByDuration($query, $duration)
     {
-        return $query->where('investment_type', $type);
+        return $query->where('duration', $duration);
+    }
+
+    public function scopeWithHigherInterest($query, $minRate = 0)
+    {
+        return $query->where('interest_rate', '>', $minRate);
     }
 }
