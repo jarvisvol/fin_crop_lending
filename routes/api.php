@@ -12,7 +12,7 @@ Route::post('auth/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::get('auth/verify', [AuthController::class, 'verifyToken']); // Public verification
 
 // Protected routes
-Route::middleware('auth:api')->group(function () {
+Route::middleware('jwt.auth')->group(function () {
     // Auth routes
     Route::post('auth/logout', [AuthController::class, 'logout']);
     Route::post('auth/refresh', [AuthController::class, 'refresh']);

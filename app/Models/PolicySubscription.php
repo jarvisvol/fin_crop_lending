@@ -51,14 +51,20 @@ class PolicySubscription extends Model
         return $prefix . $random . $timestamp;
     }
 
+    /**
+     * Get the customer that owns the subscription
+     */
     public function customer()
     {
-        return $this->belongsTo(Customer::class);
+        return $this->belongsTo(Customer::class, 'customer_id');
     }
 
+    /**
+     * Get the policy that owns the subscription
+     */
     public function policy()
     {
-        return $this->belongsTo(Policy::class);
+        return $this->belongsTo(Policy::class, 'policy_id');
     }
 
     public function getRemainingDaysAttribute(): int

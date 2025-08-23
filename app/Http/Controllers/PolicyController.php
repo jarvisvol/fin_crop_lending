@@ -76,7 +76,15 @@ class PolicyController extends Controller
     public function show(string $id): JsonResponse
     {
         try {
-            $policy = Policy::findOrFail($id);
+            // For MongoDB, use find instead of findOrFail
+            $policy = Policy::find($id);
+
+            if (!$policy) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Policy not found'
+                ], 404);
+            }
 
             return response()->json([
                 'success' => true,
@@ -86,9 +94,9 @@ class PolicyController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Policy not found',
+                'message' => 'Failed to fetch policy',
                 'error' => $e->getMessage()
-            ], 404);
+            ], 500);
         }
     }
 
@@ -211,15 +219,39 @@ class PolicyController extends Controller
             }
 
             $perPage = $request->get('per_page', 10);
-            $query = PolicySubscription::where('customer_id', auth()->id())
-                ->with('policy');
+            $customerId = auth()->id();
 
-            if ($request->has('status')) {
-                $query->where('status', $request->status);
-            }
-
-            $subscriptions = $query->orderBy('created_at', 'desc')
+            // For MongoDB, we need to manually join or use aggregation
+            $subscriptions = PolicySubscription::where('customer_id', $customerId)
+                ->when($request->has('status'), function ($query) use ($request) {
+                    return $query->where('status', $request->status);
+                })
+                ->orderBy('created_at', 'desc')
                 ->paginate($perPage);
+
+            // Manually load policy data for each subscription
+            $subscriptions->getCollection()->transform(function ($subscription) {
+                $policy = Policy::find($subscription->policy_id);
+                
+                return [
+                    'subscription_id' => $subscription->subscription_id,
+                    'investment_amount' => $subscription->investment_amount,
+                    'start_date' => $subscription->start_date,
+                    'maturity_date' => $subscription->maturity_date,
+                    'expected_maturity_amount' => $subscription->expected_maturity_amount,
+                    'status' => $subscription->status,
+                    'created_at' => $subscription->created_at,
+                    'policy' => $policy ? [
+                        '_id' => $policy->_id,
+                        'policy_number' => $policy->policy_number,
+                        'name' => $policy->name,
+                        'type' => $policy->type,
+                        'duration' => $policy->duration,
+                        'interest_rate' => $policy->interest_rate,
+                        'description' => $policy->description
+                    ] : null
+                ];
+            });
 
             return response()->json([
                 'success' => true,
@@ -277,9 +309,17 @@ class PolicyController extends Controller
     public function cancelSubscription(string $id): JsonResponse
     {
         try {
+            // For MongoDB, use where instead of findOrFail
             $subscription = PolicySubscription::where('subscription_id', $id)
                 ->where('customer_id', auth()->id())
-                ->firstOrFail();
+                ->first();
+
+            if (!$subscription) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Subscription not found'
+                ], 404);
+            }
 
             if ($subscription->status !== 'active') {
                 return response()->json([
@@ -302,5 +342,5 @@ class PolicyController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
-}
+    }
 }

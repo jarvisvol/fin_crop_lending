@@ -47,15 +47,19 @@ class Policy extends Model
     public static function generatePolicyNumber(): string
     {
         $prefix = 'POL';
-        $random = Str::upper(Str::random(6)); // 6 random characters
-        $timestamp = now()->format('mdHis'); // Month, day, hour, minute, second
+        $random = Str::upper(Str::random(6));
+        $timestamp = now()->format('mdHis');
         
         return $prefix . $random . $timestamp;
     }
 
+    /**
+     * Get subscriptions for this policy
+     * For MongoDB, we use hasMany with foreign key
+     */
     public function subscriptions()
     {
-        return $this->hasMany(PolicySubscription::class);
+        return $this->hasMany(PolicySubscription::class, 'policy_id');
     }
 
     public function activeSubscriptions()
