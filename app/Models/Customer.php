@@ -21,26 +21,40 @@ class Customer extends Model implements JWTSubject, AuthenticatableContract, Can
         'name',
         'email',
         'phone_number',
+        'date_of_birth',
+        'pan_number',
+        'aadhaar_number',
+        'bank_account_number',
+        'bank_name',
+        'bank_ifsc',
         'address',
-        'pan',
-        'policy_number',
-        'policy_type',
+        'city',
+        'state',
+        'pincode',
+        'kyc_status',
+        'kyc_verified_at',
         'password',
         'device_token',
         'last_login_at',
         'last_login_ip',
-        'is_active'
+        'is_active',
+        'documents' // For storing document references
     ];
     
     protected $hidden = [
         'password',
         'remember_token',
+        'aadhaar_number',
+        'pan_number',
+        'bank_account_number'
     ];
     
     protected $casts = [
-        'email_verified_at' => 'datetime',
+        'date_of_birth' => 'date',
+        'kyc_verified_at' => 'datetime',
         'last_login_at' => 'datetime',
         'is_active' => 'boolean',
+        'documents' => 'array',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
@@ -61,15 +75,78 @@ class Customer extends Model implements JWTSubject, AuthenticatableContract, Can
         return [
             'name' => $this->name,
             'email' => $this->email,
-            'policy_number' => $this->policy_number
+            'kyc_status' => $this->kyc_status
         ];
     }
 
     /**
-     * The attributes that should be unique.
+     * Check if KYC is verified
      */
-    public static function getUniqueFields(): array
+    public function isKycVerified(): bool
     {
-        return ['pan', 'policy_number', 'email'];
+        return $this->kyc_status === 'verified' && $this->kyc_verified_at !== null;
+    }
+
+    /**
+     * Get masked Aadhaar number
+     */
+    public function getMaskedAadhaarAttribute(): string
+    {
+        return $this->aadhaar_number ? 'XXXX-XXXX-' . substr($this->aadhaar_number, -4) : '';
+    }
+
+    /**
+     * Get masked PAN number
+     */
+    public function getMaskedPanAttribute(): string
+    {
+        return $this->pan_number ? substr($this->pan_number, 0, 5) . 'XXXX' . substr($this->pan_number, -1) : '';
+    }
+
+    /**
+     * Get masked bank account number
+     */
+    public function getMaskedBankAccountAttribute(): string
+    {
+        return $this->bank_account_number ? 'XXXX-XXXX-' . substr($this->bank_account_number, -4) : '';
+    }
+
+    /**
+     * Get age from date of birth
+     */
+    public function getAgeAttribute(): ?int
+    {
+        return $this->date_of_birth ? $this->date_of_birth->age : null;
+    }
+
+    /**
+     * Get complete address
+     */
+    public function getFullAddressAttribute(): string
+    {
+        $parts = array_filter([
+            $this->address,
+            $this->city,
+            $this->state,
+            $this->pincode
+        ]);
+
+        return implode(', ', $parts);
+    }
+
+    /**
+     * Relationship with policy subscriptions
+     */
+    public function subscriptions()
+    {
+        return $this->hasMany(PolicySubscription::class, 'customer_id');
+    }
+
+    /**
+     * Get active subscriptions
+     */
+    public function activeSubscriptions()
+    {
+        return $this->subscriptions()->where('status', 'active');
     }
 }

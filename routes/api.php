@@ -19,14 +19,15 @@ Route::middleware('jwt.auth')->group(function () {
     Route::get('auth/me', [AuthController::class, 'me']);
 
     // Customer CRUD routes (protected)
-    Route::apiResource('customers', CustomerController::class)->except(['store']);
+    Route::get('customers', [CustomerController::class, 'index']);
+    Route::post('customers', [CustomerController::class, 'store']);
+    Route::get('customers/{id}', [CustomerController::class, 'show']);
+    Route::put('customers/{id}', [CustomerController::class, 'update']);
+    Route::delete('customers/{id}', [CustomerController::class, 'destroy']);
     
-    // Additional customer routes
-    Route::prefix('customers')->group(function () {
-        Route::get('search', [CustomerController::class, 'search']);
-        Route::get('policy-type/{policyType}', [CustomerController::class, 'byPolicyType']);
-        Route::get('stats/summary', [CustomerController::class, 'summaryStats']);
-    });
+    // Customer management
+    Route::post('customers/{id}/kyc-status', [CustomerController::class, 'updateKycStatus']);
+    Route::get('customers/stats', [CustomerController::class, 'getStats']);
 
     // Policy CRUD routes
     Route::apiResource('policies', PolicyController::class);
