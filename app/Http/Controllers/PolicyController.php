@@ -100,6 +100,19 @@ class PolicyController extends Controller
         }
     }
 
+    /**
+     * Calculate lumpsum maturity amount (for digital_gold)
+     */
+    private function calculateLumpsumMaturityAmount($policy, $investmentAmount): float
+    {
+        $years = $policy->duration;
+        $annualRate = $policy->interest_rate / 100;
+        
+        // Formula for lumpsum investment with annual compounding:
+        // Maturity = Investment * (1 + annual_rate)^years
+        return $investmentAmount * pow(1 + $annualRate, $years);
+    }
+
     public function calculateMaturity(Request $request): JsonResponse
     {
         try {
@@ -117,15 +130,37 @@ class PolicyController extends Controller
             }
 
             $policy = Policy::findOrFail($request->policy_id);
-            $maturityAmount = $policy->calculateMaturityAmount($request->investment_amount);
+            $amount = $request->investment_amount;
+
+            if ($policy->type === 'daily') {
+                $totalInvestment = $amount * $policy->duration * 365;
+                $maturityAmount = $this->calculateDailyMaturityAmount($policy, $amount);
+            } elseif ($policy->type === 'monthly') {
+                $totalInvestment = $amount * $policy->duration * 12;
+                $maturityAmount = $this->calculateMonthlyMaturityAmount($policy, $amount);
+            } else {
+                // digital_gold - lumpsum
+                $totalInvestment = $amount;
+                $maturityAmount = $this->calculateLumpsumMaturityAmount($policy, $amount);
+            }
+
+            $totalInterest = $maturityAmount - $totalInvestment;
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'policy' => $policy->only(['name', 'type', 'duration', 'interest_rate']),
-                    'investment_amount' => $request->investment_amount,
-                    'maturity_amount' => $maturityAmount,
-                    'total_interest' => $maturityAmount - $request->investment_amount
+                    'policy' => [
+                        'name' => $policy->name,
+                        'type' => $policy->type,
+                        'duration' => $policy->duration,
+                        'interest_rate' => $policy->interest_rate
+                    ],
+                    'investment_amount' => round($totalInvestment, 2),
+                    'periodic_investment' => $amount,
+                    'maturity_amount' => round($maturityAmount, 2),
+                    'total_interest' => round($totalInterest, 2),
+                    'effective_return' => round(($totalInterest / $totalInvestment) * 100, 2),
+                    'maturity_date' => now()->addYears($policy->duration)->format('Y-m-d')
                 ]
             ]);
 
@@ -136,6 +171,49 @@ class PolicyController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Calculate total investment for daily payments
+     */
+    private function calculateTotalDailyInvestment($policy, $dailyAmount): float
+    {
+        $totalDays = $policy->duration * 365;
+        return $dailyAmount * $totalDays;
+    }
+
+    /**
+     * Calculate maturity amount for daily investments with daily compounding
+     */
+    private function calculateDailyMaturityAmount($policy, $dailyAmount): float
+    {
+        $years = $policy->duration;
+        $annualRate = $policy->interest_rate / 100;
+        $dailyRate = $annualRate / 365;
+        $totalDays = $years * 365;
+        
+        // Formula for daily investments with daily compounding:
+        // Maturity = Daily_Amount * [((1 + daily_rate)^total_days - 1) / daily_rate]
+        $maturityAmount = $dailyAmount * ((pow(1 + $dailyRate, $totalDays) - 1) / $dailyRate);
+        
+        return $maturityAmount;
+    }
+
+    /**
+     * Calculate monthly maturity amount (if needed for monthly policies)
+     */
+    private function calculateMonthlyMaturityAmount($policy, $monthlyAmount): float
+    {
+        $years = $policy->duration;
+        $annualRate = $policy->interest_rate / 100;
+        $monthlyRate = $annualRate / 12;
+        $totalMonths = $years * 12;
+        
+        // Formula for monthly investments with monthly compounding:
+        // Maturity = Monthly_Amount * [((1 + monthly_rate)^total_months - 1) / monthly_rate]
+        $maturityAmount = $monthlyAmount * ((pow(1 + $monthlyRate, $totalMonths) - 1) / $monthlyRate);
+        
+        return $maturityAmount;
     }
 
     public function subscribe(Request $request): JsonResponse

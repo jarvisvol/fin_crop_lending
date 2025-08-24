@@ -2,7 +2,9 @@
 
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PolicyController;
+use App\Http\Controllers\PortfolioController;
 use Illuminate\Support\Facades\Route;
 
 // Public routes
@@ -24,6 +26,12 @@ Route::middleware('jwt.auth')->group(function () {
     Route::get('customers/{id}', [CustomerController::class, 'show']);
     Route::put('customers/{id}', [CustomerController::class, 'update']);
     Route::delete('customers/{id}', [CustomerController::class, 'destroy']);
+
+    Route::get('profile', [ProfileController::class, 'getProfile']);
+    Route::put('profile', [ProfileController::class, 'updateProfile']);
+    Route::post('profile/documents', [ProfileController::class, 'uploadDocument']);
+    Route::get('profile/documents', [ProfileController::class, 'getDocuments']);
+    Route::get('profile/kyc-status', [ProfileController::class, 'getKycStatus']);
     
     // Customer management
     Route::post('customers/{id}/kyc-status', [CustomerController::class, 'updateKycStatus']);
@@ -42,6 +50,12 @@ Route::middleware('jwt.auth')->group(function () {
     Route::get('policies/subscriptions', [PolicyController::class, 'getSubscriptions']);
     Route::get('policies/stats', [PolicyController::class, 'getStats']);
     Route::post('policies/subscriptions/{id}/cancel', [PolicyController::class, 'cancelSubscription']);
+
+    Route::get('portfolio', [PortfolioController::class, 'getPortfolio']);
+    Route::get('portfolio/performance', [PortfolioController::class, 'getPerformance']);
+    Route::get('portfolio/upcoming-maturities', [PortfolioController::class, 'getUpcomingMaturities']);
+    Route::get('portfolio/policy/{policyId}', [PortfolioController::class, 'getPolicyDetails']);
+    Route::post('portfolio/sync', [PortfolioController::class, 'syncPortfolio']);
 
 });
 
