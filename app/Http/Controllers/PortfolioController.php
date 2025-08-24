@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Portfolio;
 use App\Models\PolicySubscription;
+use App\Models\Policy;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
+use Carbon\Carbon;
 
 class PortfolioController extends Controller
 {
@@ -18,34 +20,64 @@ class PortfolioController extends Controller
         try {
             $customerId = auth()->id();
 
-            $portfolio = Portfolio::where('customer_id', $customerId)
-                ->orderBy('maturity_date')
+            // Get all active subscriptions
+            $subscriptions = PolicySubscription::where('customer_id', $customerId)
+                ->with('policy')
+                ->where('status', 'active')
                 ->get();
 
-            // Calculate totals
-            $totalInvestment = $portfolio->sum('investment_amount');
-            $totalCurrentValue = $portfolio->sum('current_value');
-            $totalGain = $portfolio->sum('total_gain');
-            $totalInterest = $portfolio->sum('interest_earned');
+            $portfolioData = [];
+            $totalInvestment = 0;
+            $totalCurrentValue = 0;
+            $totalGain = 0;
+            $totalInterest = 0;
+            $activePolicies = 0;
 
-            $activePolicies = $portfolio->where('status', 'active')->count();
-            $maturedPolicies = $portfolio->where('status', 'matured')->count();
+            foreach ($subscriptions as $subscription) {
+                $policy = $subscription->policy;
+                $currentValue = $this->calculateCurrentPolicyValue($subscription);
+                $totalInvestment += $subscription->investment_amount;
+                $totalCurrentValue += $currentValue;
+                $gain = $currentValue - $subscription->investment_amount;
+                $totalGain += $gain;
+                $totalInterest += $gain;
+                $activePolicies++;
+
+                $portfolioData[] = [
+                    'subscription_id' => $subscription->subscription_id,
+                    'policy_id' => $policy->id,
+                    'policy_number' => $policy->policy_number,
+                    'policy_name' => $policy->name,
+                    'policy_type' => $policy->type,
+                    'investment_amount' => $subscription->investment_amount,
+                    'current_value' => $currentValue,
+                    'total_gain' => $gain,
+                    'interest_earned' => $gain,
+                    'interest_rate' => $policy->interest_rate,
+                    'start_date' => $subscription->start_date,
+                    'maturity_date' => $subscription->maturity_date,
+                    'duration' => $policy->duration,
+                    'status' => 'active',
+                    'days_remaining' => $subscription->start_date->diffInDays($subscription->maturity_date),
+                    'progress_percentage' => $this->calculateProgressPercentage($subscription),
+                    'is_matured' => now() >= $subscription->maturity_date
+                ];
+            }
 
             return response()->json([
                 'success' => true,
                 'data' => [
                     'summary' => [
-                        'total_investment' => $totalInvestment,
-                        'total_current_value' => $totalCurrentValue,
-                        'total_gain' => $totalGain,
-                        'total_interest_earned' => $totalInterest,
+                        'total_investment' => round($totalInvestment, 2),
+                        'total_current_value' => round($totalCurrentValue, 2),
+                        'total_gain' => round($totalGain, 2),
+                        'total_interest_earned' => round($totalInterest, 2),
                         'active_policies' => $activePolicies,
-                        'matured_policies' => $maturedPolicies,
                         'overall_return' => $totalInvestment > 0 ? 
                             round(($totalGain / $totalInvestment) * 100, 2) : 0
                     ],
                     'breakdown' => [
-                        'by_type' => $portfolio->groupBy('policy_type')->map(function ($group) {
+                        'by_type' => collect($portfolioData)->groupBy('policy_type')->map(function ($group) {
                             return [
                                 'count' => $group->count(),
                                 'investment' => $group->sum('investment_amount'),
@@ -53,7 +85,7 @@ class PortfolioController extends Controller
                                 'gain' => $group->sum('total_gain')
                             ];
                         }),
-                        'by_duration' => $portfolio->groupBy('duration')->map(function ($group) {
+                        'by_duration' => collect($portfolioData)->groupBy('duration')->map(function ($group) {
                             return [
                                 'count' => $group->count(),
                                 'investment' => $group->sum('investment_amount'),
@@ -61,9 +93,7 @@ class PortfolioController extends Controller
                             ];
                         })
                     ],
-                    'policies' => $portfolio->map(function ($item) {
-                        return $this->transformPortfolioItem($item);
-                    })
+                    'policies' => $portfolioData
                 ]
             ]);
 
@@ -77,6 +107,127 @@ class PortfolioController extends Controller
     }
 
     /**
+     * Calculate current value of a policy based on its type
+     */
+    private function calculateCurrentPolicyValue($subscription): float
+    {
+        $policy = $subscription->policy;
+        $investmentAmount = $subscription->investment_amount;
+        $startDate = $subscription->start_date;
+        $maturityDate = $subscription->maturity_date;
+        $now = now();
+
+        if ($now >= $maturityDate) {
+            // Policy matured, return full maturity amount
+            return $this->calculateMaturityAmount($policy, $investmentAmount);
+        }
+
+        // Calculate based on policy type
+        switch ($policy->type) {
+            case 'daily':
+                return $this->calculateDailyCurrentValue($policy, $investmentAmount, $startDate, $maturityDate);
+            
+            case 'monthly':
+                return $this->calculateMonthlyCurrentValue($policy, $investmentAmount, $startDate, $maturityDate);
+            
+            case 'digital_gold':
+            default:
+                return $this->calculateLumpsumCurrentValue($policy, $investmentAmount, $startDate, $maturityDate);
+        }
+    }
+
+    /**
+     * Calculate current value for daily investments
+     */
+    private function calculateDailyCurrentValue($policy, $investmentAmount, $startDate, $maturityDate): float
+    {
+        $now = now();
+        $annualRate = $policy->interest_rate / 100;
+        $dailyRate = $annualRate / 365;
+        
+        $totalDays = $startDate->diffInDays($maturityDate);
+        $elapsedDays = $startDate->diffInDays($now);
+        
+        // For daily investments, the total investment is already the sum of all daily payments
+        // Calculate partial interest based on elapsed days
+        $partialInterest = $investmentAmount * (pow(1 + $dailyRate, $elapsedDays) - 1);
+        
+        return $investmentAmount + $partialInterest;
+    }
+
+    /**
+     * Calculate current value for monthly investments
+     */
+    private function calculateMonthlyCurrentValue($policy, $investmentAmount, $startDate, $maturityDate): float
+    {
+        $now = now();
+        $annualRate = $policy->interest_rate / 100;
+        $monthlyRate = $annualRate / 12;
+        
+        $totalMonths = $startDate->diffInMonths($maturityDate);
+        $elapsedMonths = $startDate->diffInMonths($now);
+        
+        // For monthly investments, calculate partial interest
+        $partialInterest = $investmentAmount * (pow(1 + $monthlyRate, $elapsedMonths) - 1);
+        
+        return $investmentAmount + $partialInterest;
+    }
+
+    /**
+     * Calculate current value for lumpsum investments
+     */
+    private function calculateLumpsumCurrentValue($policy, $investmentAmount, $startDate, $maturityDate): float
+    {
+        $now = now();
+        $annualRate = $policy->interest_rate / 100;
+        
+        $totalYears = $startDate->diffInYears($maturityDate);
+        $elapsedYears = $startDate->diffInYears($now);
+        
+        // For lumpsum investments, use compound interest formula
+        return $investmentAmount * pow(1 + $annualRate, $elapsedYears);
+    }
+
+    /**
+     * Calculate maturity amount for a policy
+     */
+    private function calculateMaturityAmount($policy, $investmentAmount): float
+    {
+        $annualRate = $policy->interest_rate / 100;
+        
+        switch ($policy->type) {
+            case 'daily':
+                $dailyRate = $annualRate / 365;
+                $totalDays = $policy->duration * 365;
+                return $investmentAmount * pow(1 + $dailyRate, $totalDays);
+            
+            case 'monthly':
+                $monthlyRate = $annualRate / 12;
+                $totalMonths = $policy->duration * 12;
+                return $investmentAmount * pow(1 + $monthlyRate, $totalMonths);
+            
+            case 'digital_gold':
+            default:
+                return $investmentAmount * pow(1 + $annualRate, $policy->duration);
+        }
+    }
+
+    /**
+     * Calculate progress percentage
+     */
+    private function calculateProgressPercentage($subscription): float
+    {
+        $startDate = $subscription->start_date;
+        $maturityDate = $subscription->maturity_date;
+        $now = now();
+        
+        $totalDays = $startDate->diffInDays($maturityDate);
+        $elapsedDays = $startDate->diffInDays($now);
+        
+        return min(100, max(0, ($elapsedDays / $totalDays) * 100));
+    }
+
+    /**
      * Get portfolio performance over time
      */
     public function getPerformance(Request $request): JsonResponse
@@ -85,6 +236,11 @@ class PortfolioController extends Controller
             $customerId = auth()->id();
             $months = $request->get('months', 12);
 
+            $subscriptions = PolicySubscription::where('customer_id', $customerId)
+                ->with('policy')
+                ->where('status', 'active')
+                ->get();
+
             $performance = [];
             $currentDate = now();
             
@@ -92,21 +248,21 @@ class PortfolioController extends Controller
                 $date = $currentDate->copy()->subMonths($i);
                 $monthName = $date->format('M Y');
                 
-                // Simulate portfolio growth (in real app, you'd use historical data)
-                $portfolio = Portfolio::where('customer_id', $customerId)
-                    ->where('start_date', '<=', $date)
-                    ->get();
-
-                $investment = $portfolio->sum('investment_amount');
-                $value = $portfolio->sum(function ($item) use ($date) {
-                    return $item->calculateValueAtDate($date);
-                });
-
+                $monthInvestment = 0;
+                $monthValue = 0;
+                
+                foreach ($subscriptions as $subscription) {
+                    if ($subscription->start_date <= $date) {
+                        $monthInvestment += $subscription->investment_amount;
+                        $monthValue += $this->calculatePolicyValueAtDate($subscription, $date);
+                    }
+                }
+                
                 $performance[] = [
                     'month' => $monthName,
-                    'investment' => $investment,
-                    'value' => $value,
-                    'gain' => $value - $investment
+                    'investment' => round($monthInvestment, 2),
+                    'value' => round($monthValue, 2),
+                    'gain' => round($monthValue - $monthInvestment, 2)
                 ];
             }
 
@@ -125,6 +281,46 @@ class PortfolioController extends Controller
     }
 
     /**
+     * Calculate policy value at a specific date
+     */
+    private function calculatePolicyValueAtDate($subscription, $date): float
+    {
+        $policy = $subscription->policy;
+        $investmentAmount = $subscription->investment_amount;
+        $startDate = $subscription->start_date;
+        $maturityDate = $subscription->maturity_date;
+
+        if ($date >= $maturityDate) {
+            return $this->calculateMaturityAmount($policy, $investmentAmount);
+        }
+
+        if ($date < $startDate) {
+            return 0;
+        }
+
+        // Calculate based on policy type
+        switch ($policy->type) {
+            case 'daily':
+                $annualRate = $policy->interest_rate / 100;
+                $dailyRate = $annualRate / 365;
+                $elapsedDays = $startDate->diffInDays($date);
+                return $investmentAmount * pow(1 + $dailyRate, $elapsedDays);
+            
+            case 'monthly':
+                $annualRate = $policy->interest_rate / 100;
+                $monthlyRate = $annualRate / 12;
+                $elapsedMonths = $startDate->diffInMonths($date);
+                return $investmentAmount * pow(1 + $monthlyRate, $elapsedMonths);
+            
+            case 'digital_gold':
+            default:
+                $annualRate = $policy->interest_rate / 100;
+                $elapsedYears = $startDate->diffInYears($date);
+                return $investmentAmount * pow(1 + $annualRate, $elapsedYears);
+        }
+    }
+
+    /**
      * Get upcoming maturities
      */
     public function getUpcomingMaturities(Request $request): JsonResponse
@@ -133,23 +329,30 @@ class PortfolioController extends Controller
             $customerId = auth()->id();
             $limit = $request->get('limit', 5);
 
-            $upcoming = Portfolio::where('customer_id', $customerId)
+            $subscriptions = PolicySubscription::where('customer_id', $customerId)
+                ->with('policy')
                 ->where('status', 'active')
                 ->where('maturity_date', '>=', now())
                 ->orderBy('maturity_date')
                 ->limit($limit)
-                ->get()
-                ->map(function ($item) {
-                    return [
-                        'policy_name' => $item->policy_name,
-                        'policy_number' => $item->policy_number,
-                        'maturity_date' => $item->maturity_date->format('d M Y'),
-                        'days_remaining' => $item->getDaysRemaining(),
-                        'investment_amount' => $item->investment_amount,
-                        'expected_value' => $item->current_value,
-                        'expected_gain' => $item->total_gain
-                    ];
-                });
+                ->get();
+
+            $upcoming = $subscriptions->map(function ($subscription) {
+                $currentValue = $this->calculateCurrentPolicyValue($subscription);
+                $gain = $currentValue - $subscription->investment_amount;
+                
+                return [
+                    'policy_name' => $subscription->policy->name,
+                    'policy_number' => $subscription->policy->policy_number,
+                    'policy_type' => $subscription->policy->type,
+                    'maturity_date' => $subscription->maturity_date->format('d M Y'),
+                    'days_remaining' => now()->diffInDays($subscription->maturity_date),
+                    'investment_amount' => $subscription->investment_amount,
+                    'current_value' => $currentValue,
+                    'expected_gain' => $gain,
+                    'interest_rate' => $subscription->policy->interest_rate
+                ];
+            });
 
             return response()->json([
                 'success' => true,
@@ -168,36 +371,58 @@ class PortfolioController extends Controller
     /**
      * Get portfolio details for a specific policy
      */
-    public function getPolicyDetails(string $policyId): JsonResponse
+    public function getPolicyDetails(string $subscriptionId): JsonResponse
     {
         try {
             $customerId = auth()->id();
 
-            $portfolio = Portfolio::where('customer_id', $customerId)
-                ->where('policy_subscription_id', $policyId)
+            $subscription = PolicySubscription::where('customer_id', $customerId)
+                ->with('policy')
+                ->where('subscription_id', $subscriptionId)
                 ->first();
 
-            if (!$portfolio) {
+            if (!$subscription) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Policy not found in portfolio'
+                    'message' => 'Policy subscription not found'
                 ], 404);
             }
 
-            // Calculate projected values
-            $projections = $this->calculateProjections($portfolio);
+            $currentValue = $this->calculateCurrentPolicyValue($subscription);
+            $gain = $currentValue - $subscription->investment_amount;
+
+            $policyData = [
+                'subscription_id' => $subscription->subscription_id,
+                'policy_number' => $subscription->policy->policy_number,
+                'policy_name' => $subscription->policy->name,
+                'policy_type' => $subscription->policy->type,
+                'investment_amount' => $subscription->investment_amount,
+                'current_value' => $currentValue,
+                'total_gain' => $gain,
+                'interest_earned' => $gain,
+                'interest_rate' => $subscription->policy->interest_rate,
+                'start_date' => $subscription->start_date->format('d M Y'),
+                'maturity_date' => $subscription->maturity_date->format('d M Y'),
+                'duration' => $subscription->policy->duration,
+                'days_remaining' => now()->diffInDays($subscription->maturity_date),
+                'progress_percentage' => $this->calculateProgressPercentage($subscription),
+                'is_matured' => now() >= $subscription->maturity_date
+            ];
+
+            // Calculate projections
+            $projections = $this->calculateProjections($subscription);
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'portfolio' => $this->transformPortfolioItem($portfolio),
+                    'policy' => $policyData,
                     'projections' => $projections,
                     'performance_metrics' => [
-                        'annualized_return' => $this->calculateAnnualizedReturn($portfolio),
-                        'current_yield' => $portfolio->investment_amount > 0 ? 
-                            ($portfolio->interest_earned / $portfolio->investment_amount) * 100 : 0,
-                        'days_to_maturity' => $portfolio->getDaysRemaining(),
-                        'progress_percentage' => $portfolio->getProgressPercentage()
+                        'annualized_return' => $this->calculateAnnualizedReturn($subscription),
+                        'current_yield' => $subscription->investment_amount > 0 ? 
+                            ($gain / $subscription->investment_amount) * 100 : 0,
+                        'days_to_maturity' => now()->diffInDays($subscription->maturity_date),
+                        'progress_percentage' => $this->calculateProgressPercentage($subscription)
                     ]
                 ]
             ]);
@@ -212,80 +437,25 @@ class PortfolioController extends Controller
     }
 
     /**
-     * Sync portfolio with latest subscriptions
-     */
-    public function syncPortfolio(): JsonResponse
-    {
-        try {
-            $customerId = auth()->id();
-            $subscriptions = PolicySubscription::where('customer_id', $customerId)->get();
-
-            foreach ($subscriptions as $subscription) {
-                $portfolio = Portfolio::updateOrCreate(
-                    [
-                        'customer_id' => $customerId,
-                        'policy_subscription_id' => $subscription->subscription_id
-                    ],
-                    [
-                        'policy_id' => $subscription->policy_id,
-                        'policy_number' => $subscription->policy->policy_number,
-                        'policy_name' => $subscription->policy->name,
-                        'policy_type' => $subscription->policy->type,
-                        'investment_amount' => $subscription->investment_amount,
-                        'current_value' => $subscription->expected_maturity_amount,
-                        'total_gain' => $subscription->expected_maturity_amount - $subscription->investment_amount,
-                        'interest_earned' => $subscription->expected_maturity_amount - $subscription->investment_amount,
-                        'interest_rate' => $subscription->policy->interest_rate,
-                        'start_date' => $subscription->start_date,
-                        'maturity_date' => $subscription->maturity_date,
-                        'duration' => $subscription->policy->duration,
-                        'status' => $subscription->status === 'active' ? 'active' : 'matured',
-                        'last_updated' => now()
-                    ]
-                );
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Portfolio synced successfully'
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to sync portfolio',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
      * Calculate projected values for a policy
      */
-    private function calculateProjections($portfolio): array
+    private function calculateProjections($subscription): array
     {
         $projections = [];
+        $policy = $subscription->policy;
         $currentDate = now();
-        $maturityDate = $portfolio->maturity_date;
+        $maturityDate = $subscription->maturity_date;
         
         $months = $currentDate->diffInMonths($maturityDate);
-        $monthlyRate = $portfolio->interest_rate / 12 / 100;
-
+        
         for ($i = 0; $i <= min($months, 12); $i++) {
             $projectDate = $currentDate->copy()->addMonths($i);
-            $elapsedMonths = $portfolio->start_date->diffInMonths($projectDate);
-            $totalMonths = $portfolio->duration * 12;
-
-            if ($projectDate >= $maturityDate) {
-                $value = $portfolio->investment_amount * pow(1 + ($portfolio->interest_rate / 100), $portfolio->duration);
-            } else {
-                $value = $portfolio->investment_amount * pow(1 + $monthlyRate, $elapsedMonths);
-            }
-
+            $projectedValue = $this->calculatePolicyValueAtDate($subscription, $projectDate);
+            
             $projections[] = [
                 'date' => $projectDate->format('M Y'),
-                'projected_value' => round($value, 2),
-                'projected_gain' => round($value - $portfolio->investment_amount, 2)
+                'projected_value' => round($projectedValue, 2),
+                'projected_gain' => round($projectedValue - $subscription->investment_amount, 2)
             ];
         }
 
@@ -295,39 +465,37 @@ class PortfolioController extends Controller
     /**
      * Calculate annualized return
      */
-    private function calculateAnnualizedReturn($portfolio): float
+    private function calculateAnnualizedReturn($subscription): float
     {
-        $years = $portfolio->start_date->diffInYears(now());
+        $startDate = $subscription->start_date;
+        $years = $startDate->diffInYears(now());
         if ($years === 0) return 0;
 
-        $totalReturn = ($portfolio->current_value / $portfolio->investment_amount) - 1;
+        $currentValue = $this->calculateCurrentPolicyValue($subscription);
+        $totalReturn = ($currentValue / $subscription->investment_amount) - 1;
+        
         return pow(1 + $totalReturn, 1 / $years) - 1;
     }
 
     /**
-     * Transform portfolio item for response
+     * Sync portfolio with latest subscriptions
      */
-    private function transformPortfolioItem($item): array
+    public function syncPortfolio(): JsonResponse
     {
-        return [
-            'id' => $item->id,
-            'policy_subscription_id' => $item->policy_subscription_id,
-            'policy_number' => $item->policy_number,
-            'policy_name' => $item->policy_name,
-            'policy_type' => $item->policy_type,
-            'investment_amount' => $item->investment_amount,
-            'current_value' => $item->current_value,
-            'total_gain' => $item->total_gain,
-            'interest_earned' => $item->interest_earned,
-            'interest_rate' => $item->interest_rate,
-            'start_date' => $item->start_date->format('d M Y'),
-            'maturity_date' => $item->maturity_date->format('d M Y'),
-            'duration' => $item->duration,
-            'status' => $item->status,
-            'days_remaining' => $item->getDaysRemaining(),
-            'progress_percentage' => $item->getProgressPercentage(),
-            'is_matured' => $item->isMatured(),
-            'last_updated' => $item->last_updated->format('d M Y H:i')
-        ];
+        try {
+            // This method is now redundant since we calculate everything real-time
+            // But keeping it for backward compatibility
+            return response()->json([
+                'success' => true,
+                'message' => 'Portfolio data is calculated real-time. No sync needed.'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to sync portfolio',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }
