@@ -5,6 +5,7 @@ use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PolicyController;
 use App\Http\Controllers\PortfolioController;
+use App\Http\Controllers\DashboardController;
 use Illuminate\Support\Facades\Route;
 
 // Public routes
@@ -15,6 +16,10 @@ Route::get('auth/verify', [AuthController::class, 'verifyToken']); // Public ver
 
 // Protected routes
 Route::middleware('jwt.auth')->group(function () {
+
+    //Dashboard apis
+    Route::get('dashboard', [DashboardController::class, 'getDashboard']);
+
     // Auth routes
     Route::post('auth/logout', [AuthController::class, 'logout']);
     Route::post('auth/refresh', [AuthController::class, 'refresh']);
@@ -26,6 +31,8 @@ Route::middleware('jwt.auth')->group(function () {
     Route::get('customers/{id}', [CustomerController::class, 'show']);
     Route::put('customers/{id}', [CustomerController::class, 'update']);
     Route::delete('customers/{id}', [CustomerController::class, 'destroy']);
+
+    ///profile routes
 
     Route::get('profile', [ProfileController::class, 'getProfile']);
     Route::put('profile', [ProfileController::class, 'updateProfile']);
