@@ -21,7 +21,7 @@ return new class extends Migration
             $table->timestamps();
             
             // Indexes
-            $table->index('subscription_id');
+            // $table->index('subscription_id');
             $table->index('customer_id');
             $table->index('policy_id');
             $table->index('status');

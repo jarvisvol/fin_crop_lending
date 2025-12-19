@@ -22,7 +22,6 @@ return new class extends Migration
             $table->timestamps();
             
             // Indexes
-            $table->index('policy_number');
             $table->index('type');
             $table->index('duration');
             $table->index('is_active');
